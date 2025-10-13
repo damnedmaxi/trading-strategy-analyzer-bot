@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bot Trading Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <h1>Equity Curve Overview</h1>
+    <canvas id="equityChart" width="800" height="320"></canvas>
+    <script>
+      async function loadEquity() {
+        const response = await fetch('/api/analytics/equity-curve/');
+        const payload = await response.json();
+        const labels = payload.equity_curve.map((point) => point.timestamp);
+        const values = payload.equity_curve.map((point) => point.equity);
+        const ctx = document.getElementById('equityChart');
+        new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              {
+                label: 'Equity',
+                data: values,
+                borderColor: '#2563eb',
+                tension: 0.3,
+                fill: false,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: {
+                ticks: { color: '#475569' },
+              },
+              y: {
+                ticks: { color: '#475569' },
+              },
+            },
+          },
+        });
+      }
+      loadEquity();
+    </script>
+  </body>
+</html>

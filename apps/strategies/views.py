@@ -107,7 +107,14 @@ class HMASMAStrategyRunView(APIView):
         view_df["sma200_view"] = simple_moving_average(view_df["close"], self.PERIOD)
 
         merged = self._merge_trend_frames(base_df, trend_one_df, trend_two_df)
-        evaluations, entries = self._evaluate_entries(merged)
+        
+        # Select strategy based on request parameter
+        strategy_param = request.query_params.get("strategy", "1")
+        if strategy_param == "2":
+            evaluations, entries = self._evaluate_entries_strategy2(merged)
+        else:
+            evaluations, entries = self._evaluate_entries(merged)
+        
         latest_signal = evaluations[-1] if evaluations else None
         aligned_entries = self._align_entries(entries, view_df, view_timeframe)
 
@@ -191,16 +198,18 @@ class HMASMAStrategyRunView(APIView):
         return merged
 
     def _evaluate_entries(self, merged: pd.DataFrame):
+        """Strategy 1: Multi-timeframe alignment strategy"""
         entries: List[Dict] = []
         evaluations: List[Dict] = []
-        previous_long = False
-        previous_short = False
+        # Track actual open positions (not entry conditions)
+        position_long_open = False
+        position_short_open = False
 
         for row in merged.itertuples():
             sma = getattr(row, "sma200")
             if pd.isna(sma):
-                previous_long = False
-                previous_short = False
+                position_long_open = False
+                position_short_open = False
                 continue
 
             price_5m = float(row.close)
@@ -219,6 +228,9 @@ class HMASMAStrategyRunView(APIView):
 
             should_long = cond_5m_long and cond_1h_long and cond_4h_long
             should_short = cond_5m_short and cond_1h_short and cond_4h_short
+            # Exit when both open and close are on the opposite side of SMA
+            exit_long = position_long_open and (row.open < float(sma)) and (price_5m < float(sma))
+            exit_short = position_short_open and (row.open > float(sma)) and (price_5m > float(sma))
 
             timestamp_iso = row.timestamp.isoformat()
             evaluations.append(
@@ -227,6 +239,8 @@ class HMASMAStrategyRunView(APIView):
                     "should_enter": should_long,
                     "should_enter_long": should_long,
                     "should_enter_short": should_short,
+                    "should_exit_long": exit_long,
+                    "should_exit_short": exit_short,
                     "breakdown": {
                         "5m": {
                             "price": price_5m,
@@ -253,13 +267,202 @@ class HMASMAStrategyRunView(APIView):
                 }
             )
 
-            if should_long and not previous_long:
-                entries.append({"timestamp": row.timestamp.to_pydatetime(), "direction": "long"})
-            if should_short and not previous_short:
-                entries.append({"timestamp": row.timestamp.to_pydatetime(), "direction": "short"})
+            # Open new positions only if not already in one
+            if should_long and not position_long_open and not position_short_open:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "long",
+                        "price": price_5m,
+                    }
+                )
+                position_long_open = True
+                
+            if should_short and not position_short_open and not position_long_open:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "short",
+                        "price": price_5m,
+                    }
+                )
+                position_short_open = True
+                
+            # Close positions
+            if exit_long:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "long_exit",
+                        "price": price_5m,
+                    }
+                )
+                position_long_open = False
+                
+            if exit_short:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "short_exit",
+                        "price": price_5m,
+                    }
+                )
+                position_short_open = False
 
-            previous_long = should_long
-            previous_short = should_short
+        return evaluations, entries
+
+    def _evaluate_entries_strategy2(self, merged: pd.DataFrame):
+        """Strategy 2: SMA 200 5m crossover strategy with HMA 200 1h/4h"""
+        entries: List[Dict] = []
+        evaluations: List[Dict] = []
+        # Track actual open positions
+        position_long_open = False
+        position_short_open = False
+        
+        # Variables to store previous values for crossover detection
+        prev_sma = None
+        prev_hma_1h = None
+        prev_hma_4h = None
+
+        for row in merged.itertuples():
+            sma = getattr(row, "sma200")
+            if pd.isna(sma):
+                position_long_open = False
+                position_short_open = False
+                prev_sma = None
+                prev_hma_1h = None
+                prev_hma_4h = None
+                continue
+
+            sma_value = float(sma)
+            hma_1h = getattr(row, "hma200_1h")
+            hma_4h = getattr(row, "hma200_4h")
+
+            hma_1h_value = None if pd.isna(hma_1h) else float(hma_1h)
+            hma_4h_value = None if pd.isna(hma_4h) else float(hma_4h)
+
+            # Detect crossovers
+            # Entry LONG: SMA 5m crosses above HMA 4h
+            crossover_long = False
+            if prev_sma is not None and prev_hma_4h is not None and hma_4h_value is not None:
+                crossover_long = prev_sma <= prev_hma_4h and sma_value > hma_4h_value
+            
+            # Exit LONG conditions:
+            # 1) SMA 5m crosses below HMA 1h
+            crossover_exit_long_1h = False
+            if prev_sma is not None and prev_hma_1h is not None and hma_1h_value is not None:
+                crossover_exit_long_1h = prev_sma >= prev_hma_1h and sma_value < hma_1h_value
+            
+            # 2) SMA 5m crosses below HMA 4h (SHORT entry signal)
+            crossover_exit_long_4h = False
+            if prev_sma is not None and prev_hma_4h is not None and hma_4h_value is not None:
+                crossover_exit_long_4h = prev_sma >= prev_hma_4h and sma_value < hma_4h_value
+            
+            # Entry SHORT: SMA 5m crosses below HMA 4h
+            crossover_short = False
+            if prev_sma is not None and prev_hma_4h is not None and hma_4h_value is not None:
+                crossover_short = prev_sma >= prev_hma_4h and sma_value < hma_4h_value
+            
+            # Exit SHORT conditions:
+            # 1) SMA 5m crosses above HMA 1h
+            crossover_exit_short_1h = False
+            if prev_sma is not None and prev_hma_1h is not None and hma_1h_value is not None:
+                crossover_exit_short_1h = prev_sma <= prev_hma_1h and sma_value > hma_1h_value
+            
+            # 2) SMA 5m crosses above HMA 4h (LONG entry signal)
+            crossover_exit_short_4h = False
+            if prev_sma is not None and prev_hma_4h is not None and hma_4h_value is not None:
+                crossover_exit_short_4h = prev_sma <= prev_hma_4h and sma_value > hma_4h_value
+
+            should_long = crossover_long
+            should_short = crossover_short
+            # Exit if ANY exit condition is met
+            exit_long = position_long_open and (crossover_exit_long_1h or crossover_exit_long_4h)
+            exit_short = position_short_open and (crossover_exit_short_1h or crossover_exit_short_4h)
+
+            price_5m = float(row.close)
+            timestamp_iso = row.timestamp.isoformat()
+            
+            evaluations.append(
+                {
+                    "time": timestamp_iso,
+                    "should_enter": should_long,
+                    "should_enter_long": should_long,
+                    "should_enter_short": should_short,
+                    "should_exit_long": exit_long,
+                    "should_exit_short": exit_short,
+                    "breakdown": {
+                        "5m": {
+                            "price": price_5m,
+                            "indicator": sma_value,
+                            "condition_met": should_long,
+                            "condition_long": should_long,
+                            "condition_short": should_short,
+                        },
+                        "1h": {
+                            "price": price_5m,
+                            "indicator": hma_1h_value,
+                            "condition_met": False,
+                            "condition_long": not crossover_exit_long_1h if position_long_open else False,
+                            "condition_short": crossover_exit_short_1h if position_short_open else False,
+                        },
+                        "4h": {
+                            "price": price_5m,
+                            "indicator": hma_4h_value,
+                            "condition_met": should_long,
+                            "condition_long": crossover_long,
+                            "condition_short": crossover_short,
+                        },
+                    },
+                }
+            )
+
+            # Open new positions only if not already in one
+            if should_long and not position_long_open and not position_short_open:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "long",
+                        "price": price_5m,
+                    }
+                )
+                position_long_open = True
+                
+            if should_short and not position_short_open and not position_long_open:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "short",
+                        "price": price_5m,
+                    }
+                )
+                position_short_open = True
+                
+            # Close positions
+            if exit_long:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "long_exit",
+                        "price": price_5m,
+                    }
+                )
+                position_long_open = False
+                
+            if exit_short:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "short_exit",
+                        "price": price_5m,
+                    }
+                )
+                position_short_open = False
+
+            # Update previous values for next iteration
+            prev_sma = sma_value
+            prev_hma_1h = hma_1h_value
+            prev_hma_4h = hma_4h_value
 
         return evaluations, entries
 
@@ -293,7 +496,9 @@ class HMASMAStrategyRunView(APIView):
     def _calculate_base_limit(self, view_timeframe: str, limit: int | None) -> int:
         ratio = self._timeframe_ratio(view_timeframe)
         base = max(self.PERIOD + 50, (limit * ratio + self.PERIOD) if limit else self.PERIOD * ratio * 2)
-        return min(base, 20000)
+        # Increased limit to allow for longer backtesting periods
+        # 100k 5m candles = ~347 days of data
+        return min(base, 100000)
 
     @staticmethod
     def _timeframe_ratio(view_timeframe: str) -> int:
@@ -325,6 +530,7 @@ class HMASMAStrategyRunView(APIView):
                     "time": entry["timestamp"].isoformat(),
                     "source_time": entry["timestamp"].isoformat(),
                     "direction": entry["direction"],
+                    "price": entry.get("price"),
                 }
                 for entry in entries
             ]
@@ -358,6 +564,7 @@ class HMASMAStrategyRunView(APIView):
                     "time": candle_ts.isoformat(),
                     "source_time": entry_ts.isoformat(),
                     "direction": entry["direction"],
+                    "price": entry.get("price"),
                 }
             )
         return aligned

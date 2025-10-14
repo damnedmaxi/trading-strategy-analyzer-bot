@@ -87,6 +87,16 @@ python apps/datafeeds/scripts/fetch_multi_timeframes.py \
   --limit 1000 \
   --exchange binance
 
+1m - 1 minuto
+5m - 5 minutos
+15m - 15 minutos
+30m - 30 minutos
+1h - 1 hora
+4h - 4 horas
+1d - 1 día (no d)
+1w - 1 semana
+1M - 1 mes
+
 # 6) Frontend React – recuerda levantar primero el backend
 cd frontend && npm install
 cd frontend && npm run dev

@@ -68,6 +68,19 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
         timeVisible: true,
         secondsVisible: false,
       },
+      localization: {
+        // Use browser's local timezone
+        timeFormatter: (timestamp: number) => {
+          const date = new Date(timestamp * 1000);
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          const hour = String(date.getHours()).padStart(2, '0');
+          const minute = String(date.getMinutes()).padStart(2, '0');
+          const second = String(date.getSeconds()).padStart(2, '0');
+          return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+        },
+      },
       crosshair: {
         mode: 0,
       },
@@ -145,16 +158,52 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
       close: candle.close,
     }));
     candleSeriesRef.current.setData(seriesData);
-    if (markerSeriesRef.current) {
-      const markerData: LineData<UTCTimestamp>[] = visibleCandles.map((candle) => ({
-        time: candle.time,
-        value: candle.close,
-      }));
-      markerSeriesRef.current.setData(markerData);
-    }
     chartRef.current.timeScale().fitContent();
     chartRef.current.timeScale().applyOptions({ rightOffset: 6 });
   }, [visibleCandles]);
+
+  // Update marker series data to include both candle times and entry sourceTimes
+  // This ensures markers can be placed at any sourceTime
+  useEffect(() => {
+    if (!markerSeriesRef.current || !visibleCandles.length) return;
+    
+    // Create a map of all timestamps to their prices
+    const timeToPrice = new Map<UTCTimestamp, number>();
+    
+    // Add candle timestamps
+    visibleCandles.forEach((candle) => {
+      timeToPrice.set(candle.time, candle.close);
+    });
+    
+    // Add entry sourceTimes with prices
+    entries.forEach((entry) => {
+      if (!timeToPrice.has(entry.sourceTime)) {
+        // Use entry.price if available, otherwise find nearest candle
+        let price = entry.price;
+        if (price == null) {
+          // Find the closest candle by timestamp
+          let minDiff = Infinity;
+          let closestPrice = visibleCandles[0]?.close ?? 0;
+          for (const candle of visibleCandles) {
+            const diff = Math.abs(candle.time - entry.sourceTime);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestPrice = candle.close;
+            }
+          }
+          price = closestPrice;
+        }
+        timeToPrice.set(entry.sourceTime, price);
+      }
+    });
+    
+    // Convert to sorted array
+    const markerData: LineData<UTCTimestamp>[] = Array.from(timeToPrice.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([time, value]) => ({ time, value }));
+    
+    markerSeriesRef.current.setData(markerData);
+  }, [visibleCandles, entries]);
 
   useEffect(() => {
     if (!smaSeriesRef.current) return;
@@ -193,13 +242,50 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
       text: string;
     };
 
-    const markers: Marker[] = entries.map((entry) => ({
-      time: entry.time,
-      position: entry.direction === 'long' ? 'belowBar' : 'aboveBar',
-      color: entry.direction === 'long' ? '#22c55e' : '#ef4444',
-      shape: entry.direction === 'long' ? 'arrowUp' : 'arrowDown',
-      text: entry.direction === 'long' ? 'LONG' : 'SHORT',
-    }));
+    const markers: Marker[] = entries.map((entry) => {
+      switch (entry.direction) {
+        case 'long':
+          return {
+            time: entry.sourceTime,
+            position: 'belowBar',
+            color: '#22c55e',
+            shape: 'arrowUp',
+            text: 'LONG',
+          };
+        case 'short':
+          return {
+            time: entry.sourceTime,
+            position: 'aboveBar',
+            color: '#ef4444',
+            shape: 'arrowDown',
+            text: 'SHORT',
+          };
+        case 'long_exit':
+          return {
+            time: entry.sourceTime,
+            position: 'aboveBar',
+            color: '#f59e0b',
+            shape: 'arrowDown',
+            text: 'LONG EXIT',
+          };
+        case 'short_exit':
+          return {
+            time: entry.sourceTime,
+            position: 'belowBar',
+            color: '#0ea5e9',
+            shape: 'arrowUp',
+            text: 'SHORT EXIT',
+          };
+        default:
+          return {
+            time: entry.sourceTime,
+            position: 'belowBar',
+            color: '#6b7280',
+            shape: 'arrowUp',
+            text: entry.direction,
+          };
+      }
+    });
     const seriesWithMarkers = markerSeriesRef.current as unknown as {
       setMarkers?: (markers: Marker[]) => void;
     };

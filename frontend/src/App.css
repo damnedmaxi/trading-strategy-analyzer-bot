@@ -145,6 +145,38 @@
   border: 1px solid #1f2937;
 }
 
+.playback-config {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.playback-config label {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.playback-config input[type='number'] {
+  background: #111827;
+  color: #f8fafc;
+  border: 1px solid #1f2937;
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  width: 120px;
+}
+
+.pnl-display {
+  font-weight: 600;
+}
+
+.position-display {
+  font-size: 0.9rem;
+  color: #cbd5f5;
+}
+
 .playback-buttons {
   display: flex;
   gap: 0.75rem;
@@ -221,6 +253,128 @@
   }
 }
 
+/* Trades Table */
+.trades-table {
+  border-radius: 1rem;
+  background: #0f172a;
+  border: 1px solid #1f2937;
+  padding: 1.5rem;
+}
+
+.trades-table h2 {
+  margin: 0 0 1rem 0;
+  font-size: 1.3rem;
+  color: #60a5fa;
+}
+
+.no-trades {
+  color: #64748b;
+  font-style: italic;
+  padding: 2rem 0;
+  text-align: center;
+}
+
+.trades-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.trades-table thead {
+  background: #111827;
+  border-bottom: 2px solid #1f2937;
+}
+
+.trades-table th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.trades-table tbody tr {
+  border-bottom: 1px solid #1f2937;
+  transition: background 0.2s ease;
+}
+
+.trades-table tbody tr:hover {
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.trades-table tbody tr.win {
+  border-left: 3px solid #22c55e;
+}
+
+.trades-table tbody tr.loss {
+  border-left: 3px solid #ef4444;
+}
+
+.trades-table td {
+  padding: 0.75rem 1rem;
+  color: #cbd5e1;
+}
+
+.trades-table td.price {
+  font-family: 'Monaco', 'Courier New', monospace;
+  color: #facc15;
+}
+
+.trades-table td.pnl {
+  font-weight: 600;
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.trades-table td.pnl.positive {
+  color: #22c55e;
+}
+
+.trades-table td.pnl.negative {
+  color: #ef4444;
+}
+
+.trades-table .badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.trades-table .badge.long {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.trades-table .badge.short {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.trades-table .result-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.trades-table .result-badge.win {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.trades-table .result-badge.loss {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
 @media (max-width: 768px) {
   .controls {
     flex-direction: column;
@@ -241,5 +395,18 @@
 
   .playback-progress {
     width: 100%;
+  }
+
+  .trades-table {
+    overflow-x: auto;
+  }
+
+  .trades-table table {
+    font-size: 0.8rem;
+  }
+
+  .trades-table th,
+  .trades-table td {
+    padding: 0.5rem 0.75rem;
   }
 }

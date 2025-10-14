@@ -4,10 +4,13 @@ import { apiClient, toNumber } from './client';
 import type { IndicatorPoint, Timeframe } from './types';
 import type { Candle } from './types';
 
+export type StrategyEntryDirection = 'long' | 'short' | 'long_exit' | 'short_exit';
+
 export interface StrategyEntry {
   time: UTCTimestamp;
   sourceTime: UTCTimestamp;
-  direction: 'long' | 'short';
+  direction: StrategyEntryDirection;
+  price: number | null;
 }
 
 export interface SignalSnapshot {
@@ -15,6 +18,8 @@ export interface SignalSnapshot {
   should_enter: boolean;
   should_enter_long: boolean;
   should_enter_short: boolean;
+  should_exit_long: boolean;
+  should_exit_short: boolean;
 }
 
 export interface HMASMAStrategyResponse {
@@ -33,6 +38,8 @@ export interface StrategySnapshot {
   should_enter: boolean;
   should_enter_long: boolean;
   should_enter_short: boolean;
+  should_exit_long: boolean;
+  should_exit_short: boolean;
   breakdown: Record<TimeframeKey, BreakdownEntry>;
 }
 
@@ -52,6 +59,7 @@ export interface StrategyRunParams {
   limit?: number;
   start?: string;
   end?: string;
+  strategy?: string;
 }
 
 export async function fetchHMASMAStrategy(params: StrategyRunParams): Promise<HMASMAStrategyResponse> {
@@ -78,12 +86,15 @@ export async function fetchHMASMAStrategy(params: StrategyRunParams): Promise<HM
       time: Math.floor(new Date(entry.time).getTime() / 1000) as UTCTimestamp,
       sourceTime: Math.floor(new Date((entry.source_time ?? entry.time)).getTime() / 1000) as UTCTimestamp,
       direction: entry.direction,
+      price: entry.price != null ? Number(entry.price) : null,
     })),
     signal_timeline: (data.signal_timeline || []).map((snapshot: any) => ({
       time: Math.floor(new Date(snapshot.time).getTime() / 1000) as UTCTimestamp,
       should_enter: Boolean(snapshot.should_enter),
       should_enter_long: Boolean(snapshot.should_enter_long ?? snapshot.should_enter),
       should_enter_short: Boolean(snapshot.should_enter_short ?? false),
+      should_exit_long: Boolean(snapshot.should_exit_long ?? false),
+      should_exit_short: Boolean(snapshot.should_exit_short ?? false),
     })),
     latest_signal: data.latest_signal ? convertSnapshot(data.latest_signal) : null,
   };
@@ -107,6 +118,8 @@ function convertSnapshot(snapshot: any): StrategySnapshot {
     should_enter: Boolean(snapshot.should_enter),
     should_enter_long: Boolean(snapshot.should_enter_long ?? snapshot.should_enter),
     should_enter_short: Boolean(snapshot.should_enter_short ?? false),
+    should_exit_long: Boolean(snapshot.should_exit_long ?? false),
+    should_exit_short: Boolean(snapshot.should_exit_short ?? false),
     breakdown: breakdownEntries,
   };
 }

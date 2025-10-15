@@ -49,3 +49,46 @@ def validate_series(series: pd.Series, period: Optional[int]) -> None:
         raise TypeError("Indicator functions require a pandas Series input.")
     if period is None or period <= 0:
         raise ValueError("Period must be a positive integer.")
+
+
+def average_true_range(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
+    """
+    Calculate Average True Range (ATR) for volatility measurement.
+    
+    Args:
+        high: High prices
+        low: Low prices  
+        close: Close prices
+        period: ATR period (typically 14)
+        
+    Returns:
+        ATR values
+    """
+    validate_series(high, period)
+    validate_series(low, period)
+    validate_series(close, period)
+    
+    # Calculate True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    # Calculate ATR as SMA of True Range
+    return true_range.rolling(window=period, min_periods=period).mean()
+
+
+def volume_average(volume: pd.Series, period: int) -> pd.Series:
+    """
+    Calculate average volume over specified period.
+    
+    Args:
+        volume: Volume data
+        period: Period for average calculation
+        
+    Returns:
+        Average volume values
+    """
+    validate_series(volume, period)
+    return volume.rolling(window=period, min_periods=period).mean()

@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 
 from apps.datafeeds.models import Candle, Symbol
 
-from .indicators import hull_moving_average, simple_moving_average
+from .indicators import hull_moving_average, simple_moving_average, average_true_range, volume_average
 from .models import Strategy
 from .serializers import StrategySerializer
 
@@ -112,6 +112,10 @@ class HMASMAStrategyRunView(APIView):
         strategy_param = request.query_params.get("strategy", "1")
         if strategy_param == "2":
             evaluations, entries = self._evaluate_entries_strategy2(merged)
+        elif strategy_param == "3":
+            # Calculate additional indicators for Strategy 3
+            merged = self._calculate_strategy3_indicators(merged)
+            evaluations, entries = self._evaluate_entries_strategy3(merged)
         else:
             evaluations, entries = self._evaluate_entries(merged)
         
@@ -197,6 +201,38 @@ class HMASMAStrategyRunView(APIView):
 
         return merged
 
+    def _calculate_strategy3_indicators(self, merged: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate additional indicators needed for Strategy 3 (Smart Crossover Hybrid).
+        
+        Args:
+            merged: DataFrame with basic indicators already calculated
+            
+        Returns:
+            DataFrame with additional indicators for Strategy 3
+        """
+        # ATR(14) for volatility measurement
+        merged["atr14"] = average_true_range(
+            high=merged["high"],
+            low=merged["low"], 
+            close=merged["close"],
+            period=14
+        )
+        
+        # Volume Average(20) for volume confirmation
+        merged["volume_avg20"] = volume_average(
+            volume=merged["volume"],
+            period=20
+        )
+        
+        # ATR as percentage of price for volatility filter
+        merged["atr_percent"] = (merged["atr14"] / merged["close"]) * 100
+        
+        # Volume ratio for volume confirmation
+        merged["volume_ratio"] = merged["volume"] / merged["volume_avg20"]
+        
+        return merged
+
     def _evaluate_entries(self, merged: pd.DataFrame):
         """Strategy 1: Multi-timeframe alignment strategy"""
         entries: List[Dict] = []
@@ -228,6 +264,7 @@ class HMASMAStrategyRunView(APIView):
 
             should_long = cond_5m_long and cond_1h_long and cond_4h_long
             should_short = cond_5m_short and cond_1h_short and cond_4h_short
+            
             # Exit when both open and close are on the opposite side of SMA
             exit_long = position_long_open and (row.open < float(sma)) and (price_5m < float(sma))
             exit_short = position_short_open and (row.open > float(sma)) and (price_5m > float(sma))
@@ -568,3 +605,204 @@ class HMASMAStrategyRunView(APIView):
                 }
             )
         return aligned
+
+    def _evaluate_entries_strategy3(self, merged: pd.DataFrame):
+        """Strategy 3: Smart Crossover Hybrid with Risk Management"""
+        entries: List[Dict] = []
+        evaluations: List[Dict] = []
+        
+        # Track actual open positions
+        position_long_open = False
+        position_short_open = False
+        
+        # Variables to store previous values for crossover detection
+        prev_sma = None
+        prev_hma_1h = None
+        prev_hma_4h = None
+        
+        # Risk management parameters
+        ATR_MULTIPLIER = 2.0
+        MAX_ATR_PERCENT = 3.0
+        RISK_PER_TRADE = 1.0
+        MIN_RR_RATIO = 2.0
+
+        for row in merged.itertuples():
+            sma = getattr(row, "sma200")
+            if pd.isna(sma):
+                position_long_open = False
+                position_short_open = False
+                prev_sma = None
+                prev_hma_1h = None
+                prev_hma_4h = None
+                continue
+
+            sma_value = float(sma)
+            hma_1h = getattr(row, "hma200_1h")
+            hma_4h = getattr(row, "hma200_4h")
+            atr14 = getattr(row, "atr14")
+            atr_percent = getattr(row, "atr_percent")
+            volume_ratio = getattr(row, "volume_ratio")
+
+            hma_1h_value = None if pd.isna(hma_1h) else float(hma_1h)
+            hma_4h_value = None if pd.isna(hma_4h) else float(hma_4h)
+            atr14_value = None if pd.isna(atr14) else float(atr14)
+            atr_percent_value = None if pd.isna(atr_percent) else float(atr_percent)
+            volume_ratio_value = None if pd.isna(volume_ratio) else float(volume_ratio)
+
+            price_5m = float(row.close)
+
+            # Detect crossovers (base from Strategy 2)
+            crossover_long = False
+            crossover_short = False
+            
+            if prev_sma is not None and prev_hma_4h is not None and hma_4h_value is not None:
+                crossover_long = prev_sma <= prev_hma_4h and sma_value > hma_4h_value
+                crossover_short = prev_sma >= prev_hma_4h and sma_value < hma_4h_value
+
+            # ========== STRATEGY 3 FILTERS ==========
+            # Additional filters for higher precision
+            
+            # Volatility filter: Skip if ATR > 3% of price
+            volatility_ok = atr_percent_value is None or atr_percent_value <= MAX_ATR_PERCENT
+            
+            # Volume filter: Require volume > average
+            volume_ok = volume_ratio_value is None or volume_ratio_value > 1.0
+            
+            # Trend filter: Price must be on correct side of SMA
+            trend_long_ok = price_5m > sma_value
+            trend_short_ok = price_5m < sma_value
+            
+            # Multi-timeframe confirmation
+            mtf_long_ok = hma_1h_value is not None and hma_4h_value is not None and hma_1h_value > hma_4h_value
+            mtf_short_ok = hma_1h_value is not None and hma_4h_value is not None and hma_1h_value < hma_4h_value
+            
+            # Apply all filters
+            should_long = (crossover_long and volatility_ok and volume_ok and 
+                          trend_long_ok and mtf_long_ok)
+            should_short = (crossover_short and volatility_ok and volume_ok and 
+                           trend_short_ok and mtf_short_ok)
+            # =========================================
+
+            # Exit conditions (simplified for now)
+            exit_long = position_long_open and (row.open < sma_value) and (price_5m < sma_value)
+            exit_short = position_short_open and (row.open > sma_value) and (price_5m > sma_value)
+
+            timestamp_iso = row.timestamp.isoformat()
+            
+            # Calculate stop loss and take profit levels
+            stop_loss_long = None
+            take_profit_long = None
+            stop_loss_short = None
+            take_profit_short = None
+            
+            if atr14_value is not None:
+                # Long position risk management
+                stop_loss_long = price_5m - (atr14_value * ATR_MULTIPLIER)
+                take_profit_long = price_5m + (atr14_value * ATR_MULTIPLIER * MIN_RR_RATIO)
+                
+                # Short position risk management
+                stop_loss_short = price_5m + (atr14_value * ATR_MULTIPLIER)
+                take_profit_short = price_5m - (atr14_value * ATR_MULTIPLIER * MIN_RR_RATIO)
+
+            evaluations.append(
+                {
+                    "time": timestamp_iso,
+                    "should_enter": should_long,
+                    "should_enter_long": should_long,
+                    "should_enter_short": should_short,
+                    "should_exit_long": exit_long,
+                    "should_exit_short": exit_short,
+                    # Strategy 3 specific information
+                    "atr14": atr14_value,
+                    "atr_percent": atr_percent_value,
+                    "volume_ratio": volume_ratio_value,
+                    "volatility_ok": volatility_ok,
+                    "volume_ok": volume_ok,
+                    "crossover_long": crossover_long,
+                    "crossover_short": crossover_short,
+                    "stop_loss_long": stop_loss_long,
+                    "take_profit_long": take_profit_long,
+                    "stop_loss_short": stop_loss_short,
+                    "take_profit_short": take_profit_short,
+                    "breakdown": {
+                        "5m": {
+                            "price": price_5m,
+                            "indicator": sma_value,
+                            "condition_met": should_long,
+                            "condition_long": should_long,
+                            "condition_short": should_short,
+                        },
+                        "1h": {
+                            "price": price_5m,
+                            "indicator": hma_1h_value,
+                            "condition_met": mtf_long_ok,
+                            "condition_long": mtf_long_ok,
+                            "condition_short": mtf_short_ok,
+                        },
+                        "4h": {
+                            "price": price_5m,
+                            "indicator": hma_4h_value,
+                            "condition_met": should_long,
+                            "condition_long": should_long,
+                            "condition_short": should_short,
+                        },
+                    },
+                }
+            )
+
+            # Update previous values for next iteration
+            prev_sma = sma_value
+            prev_hma_1h = hma_1h_value
+            prev_hma_4h = hma_4h_value
+
+            # Open new positions only if not already in one
+            if should_long and not position_long_open and not position_short_open:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "long",
+                        "price": price_5m,
+                        "stop_loss": stop_loss_long,
+                        "take_profit": take_profit_long,
+                        "atr": atr14_value,
+                        "risk_percent": RISK_PER_TRADE,
+                    }
+                )
+                position_long_open = True
+
+            if should_short and not position_short_open and not position_long_open:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "short",
+                        "price": price_5m,
+                        "stop_loss": stop_loss_short,
+                        "take_profit": take_profit_short,
+                        "atr": atr14_value,
+                        "risk_percent": RISK_PER_TRADE,
+                    }
+                )
+                position_short_open = True
+
+            # Close positions
+            if exit_long:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "long_exit",
+                        "price": price_5m,
+                    }
+                )
+                position_long_open = False
+
+            if exit_short:
+                entries.append(
+                    {
+                        "timestamp": row.timestamp.to_pydatetime(),
+                        "direction": "short_exit",
+                        "price": price_5m,
+                    }
+                )
+                position_short_open = False
+
+        return evaluations, entries

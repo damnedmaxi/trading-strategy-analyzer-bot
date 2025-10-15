@@ -255,6 +255,7 @@ function App() {
           >
             <option value="1">Strategy 1 - Multi-timeframe</option>
             <option value="2">Strategy 2 - Crossover</option>
+            <option value="3">Strategy 3 - Smart Crossover Hybrid</option>
           </select>
         </div>
 
@@ -461,6 +462,7 @@ function App() {
                       ? `${durationHours}h ${remainingMinutes}m`
                       : `${durationMinutes}m`;
                   const pnlPercent = ((trade.pnl / positionSize) * 100).toFixed(2);
+                  const pnlPercentNum = parseFloat(pnlPercent);
                   const isWin = trade.pnl > 0;
                   
                   return (
@@ -479,7 +481,7 @@ function App() {
                         {trade.pnl > 0 ? '+' : ''}{trade.pnl.toFixed(2)}
                       </td>
                       <td className={`pnl ${isWin ? 'positive' : 'negative'}`}>
-                        {pnlPercent > 0 ? '+' : ''}{pnlPercent}%
+                        {pnlPercentNum > 0 ? '+' : ''}{pnlPercent}%
                       </td>
                       <td>
                         <span className={`result-badge ${isWin ? 'win' : 'loss'}`}>

@@ -145,3 +145,6 @@ class HMASMAStrategyRunAPITests(TestCase):
             self.assertIn("source_time", data["entries"][0])
         self.assertIn("signal_timeline", data)
         self.assertGreater(len(data["signal_timeline"]), 0)
+        self.assertIn("indicators", data)
+        self.assertIn("sma", data["indicators"])
+        self.assertIn("hma", data["indicators"])

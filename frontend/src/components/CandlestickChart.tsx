@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweight-charts';
 import type {
   CandlestickData,
@@ -6,27 +6,41 @@ import type {
   LineData,
   UTCTimestamp,
 } from 'lightweight-charts';
-import type { Candle, IndicatorPoint, Timeframe } from '../api/types';
+import type { Candle, Timeframe, Divergence } from '../api/types';
 import type { StrategyEntry } from '../api/strategy';
+import { fetchDivergences } from '../api/divergences';
+
+export interface IndicatorSeries {
+  id: string;
+  type: 'sma' | 'hma';
+  timeframe: string;
+  label: string;
+  color: string;
+  width?: number;
+  data: { time: UTCTimestamp; value: number }[];
+}
 
 interface Props {
   candles: Candle[];
-  sma: IndicatorPoint[];
-  hma1h: IndicatorPoint[];
-  hma4h: IndicatorPoint[];
+  indicatorSeries: IndicatorSeries[];
   entries: StrategyEntry[];
   currentIndex: number;
   timeframe: Timeframe;
+  symbol: string;
 }
 
-export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentIndex, timeframe }: Props) {
+export function CandlestickChart({ candles, indicatorSeries, entries, currentIndex, timeframe, symbol }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
-  const smaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const hma1hSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const hma4hSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const markerSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const indicatorSeriesRefs = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
+  
+  // Divergence state
+  const [showDivergences, setShowDivergences] = useState(false);
+  const [showAllTimeframes, setShowAllTimeframes] = useState(false);
+  const [divergences, setDivergences] = useState<Divergence[]>([]);
+  const divergenceSeriesRefs = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
 
   const visibleCandles = useMemo(() => {
     if (!candles.length) return [];
@@ -34,23 +48,35 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
     return candles.slice(0, endIndex + 1);
   }, [candles, currentIndex]);
 
-  const visibleSma = useMemo(() => {
-    if (!visibleCandles.length) return [];
-    const lastTime = visibleCandles[visibleCandles.length - 1].time;
-    return sma.filter((point) => point.time <= lastTime);
-  }, [sma, visibleCandles]);
+  // Load divergences when settings change
+  useEffect(() => {
+    if (!showDivergences || !visibleCandles.length) {
+      setDivergences([]);
+      return;
+    }
 
-  const visibleHma1h = useMemo(() => {
-    if (!visibleCandles.length) return [];
-    const lastTime = visibleCandles[visibleCandles.length - 1].time;
-    return hma1h.filter((point) => point.time <= lastTime);
-  }, [hma1h, visibleCandles]);
+    const loadDivergences = async () => {
+      try {
+        const startTime = new Date(visibleCandles[0].time * 1000).toISOString();
+        const endTime = new Date(visibleCandles[visibleCandles.length - 1].time * 1000).toISOString();
+        
+        const fetchedDivergences = await fetchDivergences(
+          symbol,
+          timeframe,
+          startTime,
+          endTime,
+          showAllTimeframes
+        );
+        
+        setDivergences(fetchedDivergences);
+      } catch (error) {
+        console.error('Error loading divergences:', error);
+        setDivergences([]);
+      }
+    };
 
-  const visibleHma4h = useMemo(() => {
-    if (!visibleCandles.length) return [];
-    const lastTime = visibleCandles[visibleCandles.length - 1].time;
-    return hma4h.filter((point) => point.time <= lastTime);
-  }, [hma4h, visibleCandles]);
+    loadDivergences();
+  }, [showDivergences, showAllTimeframes, visibleCandles, symbol, timeframe]);
 
   useEffect(() => {
     if (!containerRef.current) return () => undefined;
@@ -98,27 +124,6 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
       borderVisible: false,
     });
 
-    const smaSeries = chart.addSeries(LineSeries, {
-      color: '#facc15',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'SMA200',
-    });
-
-    const hma1hSeries = chart.addSeries(LineSeries, {
-      color: '#60a5fa',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'HMA200 1h',
-    });
-
-    const hma4hSeries = chart.addSeries(LineSeries, {
-      color: '#a855f7',
-      lineWidth: 2,
-      priceLineVisible: false,
-      title: 'HMA200 4h',
-    });
-
     const markerSeries = chart.addSeries(LineSeries, {
       color: 'rgba(0,0,0,0)',
       lineWidth: 1,
@@ -129,10 +134,11 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
 
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
-    smaSeriesRef.current = smaSeries;
-    hma1hSeriesRef.current = hma1hSeries;
-    hma4hSeriesRef.current = hma4hSeries;
     markerSeriesRef.current = markerSeries;
+    indicatorSeriesRefs.current.clear();
+
+    // Clear divergence series refs
+    divergenceSeriesRefs.current.clear();
 
     const resize = () => {
       if (!containerRef.current || !chartRef.current) return;
@@ -206,31 +212,41 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
   }, [visibleCandles, entries]);
 
   useEffect(() => {
-    if (!smaSeriesRef.current) return;
-    const data: LineData<UTCTimestamp>[] = visibleSma.map((point) => ({
-      time: point.time,
-      value: point.value,
-    }));
-    smaSeriesRef.current.setData(data);
-  }, [visibleSma]);
+    if (!chartRef.current) return;
+    const map = indicatorSeriesRefs.current;
+    const cutoff = visibleCandles.length ? visibleCandles[visibleCandles.length - 1].time : null;
+    const activeIds = new Set(indicatorSeries.map((series) => series.id));
 
-  useEffect(() => {
-    if (!hma1hSeriesRef.current) return;
-    const data: LineData<UTCTimestamp>[] = visibleHma1h.map((point) => ({
-      time: point.time,
-      value: point.value,
-    }));
-    hma1hSeriesRef.current.setData(data);
-  }, [visibleHma1h]);
+    Array.from(map.entries()).forEach(([id, lineSeries]) => {
+      if (!activeIds.has(id)) {
+        chartRef.current?.removeSeries(lineSeries);
+        map.delete(id);
+      }
+    });
 
-  useEffect(() => {
-    if (!hma4hSeriesRef.current) return;
-    const data: LineData<UTCTimestamp>[] = visibleHma4h.map((point) => ({
-      time: point.time,
-      value: point.value,
-    }));
-    hma4hSeriesRef.current.setData(data);
-  }, [visibleHma4h]);
+    indicatorSeries.forEach((series) => {
+      let lineSeries = map.get(series.id);
+      if (!lineSeries) {
+        lineSeries = chartRef.current!.addSeries(LineSeries, {
+          color: series.color,
+          lineWidth: series.width ?? 2,
+          priceLineVisible: false,
+          title: series.label,
+        });
+        map.set(series.id, lineSeries);
+      } else {
+        // Update style if it changed
+        lineSeries.applyOptions({
+          color: series.color,
+          lineWidth: series.width ?? 2,
+          priceLineVisible: false,
+          title: series.label,
+        });
+      }
+      const data = cutoff == null ? series.data : series.data.filter((point) => point.time <= cutoff);
+      lineSeries.setData(data);
+    });
+  }, [indicatorSeries, visibleCandles]);
 
   useEffect(() => {
     if (!markerSeriesRef.current) return;
@@ -294,12 +310,110 @@ export function CandlestickChart({ candles, sma, hma1h, hma4h, entries, currentI
     }
   }, [entries]);
 
+  // Draw divergences
+  useEffect(() => {
+    if (!chartRef.current || !showDivergences || !divergences.length) {
+      // Remove all divergence series if not showing
+      divergenceSeriesRefs.current.forEach((series) => {
+        chartRef.current?.removeSeries(series);
+      });
+      divergenceSeriesRefs.current.clear();
+      return;
+    }
+
+    // Get color mapping for divergence types
+    const getDivergenceColor = (type: Divergence['type']): string => {
+      switch (type) {
+        case 'macd_bullish':
+          return '#22c55e'; // Green
+        case 'macd_bearish':
+          return '#ef4444'; // Red
+        case 'rsi_bullish':
+          return '#3b82f6'; // Blue
+        case 'rsi_bearish':
+          return '#f59e0b'; // Orange
+        default:
+          return '#6b7280'; // Gray
+      }
+    };
+
+    // Create or update divergence series
+    divergences.forEach((divergence) => {
+      const seriesKey = `${divergence.type}_${divergence.id}`;
+      
+      if (!divergenceSeriesRefs.current.has(seriesKey)) {
+        // Create new series for this divergence
+        const series = chartRef.current!.addSeries(LineSeries, {
+          color: getDivergenceColor(divergence.type),
+          lineWidth: 2,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+          lastValueVisible: false,
+          title: `${divergence.type.toUpperCase()} (${divergence.timeframe})`,
+        });
+        
+        divergenceSeriesRefs.current.set(seriesKey, series);
+      }
+      
+      const series = divergenceSeriesRefs.current.get(seriesKey)!;
+      
+      // Set the line data (start and end points)
+      const lineData: LineData<UTCTimestamp>[] = [
+        {
+          time: divergence.startTime,
+          value: divergence.startPrice,
+        },
+        {
+          time: divergence.endTime,
+          value: divergence.endPrice,
+        },
+      ];
+      
+      series.setData(lineData);
+    });
+
+    // Remove series for divergences that are no longer present
+    const currentSeriesKeys = new Set(
+      divergences.map((d) => `${d.type}_${d.id}`)
+    );
+    
+    divergenceSeriesRefs.current.forEach((series, key) => {
+      if (!currentSeriesKeys.has(key)) {
+        chartRef.current?.removeSeries(series);
+        divergenceSeriesRefs.current.delete(key);
+      }
+    });
+  }, [divergences, showDivergences]);
+
   return (
     <div className="chart-wrapper">
+      <div className="chart-controls">
+        <label className="control-item">
+          <input
+            type="checkbox"
+            checked={showDivergences}
+            onChange={(e) => setShowDivergences(e.target.checked)}
+          />
+          Show Divergences
+        </label>
+        {showDivergences && (
+          <label className="control-item">
+            <input
+              type="checkbox"
+              checked={showAllTimeframes}
+              onChange={(e) => setShowAllTimeframes(e.target.checked)}
+            />
+            All Timeframes
+          </label>
+        )}
+      </div>
       <div ref={containerRef} className="chart-container" />
       <div className="chart-legend">
         <span>{`Timeframe: ${timeframe}`}</span>
         <span>{`Candles: ${visibleCandles.length}`}</span>
+        {showDivergences && (
+          <span>{`Divergences: ${divergences.length}`}</span>
+        )}
       </div>
     </div>
   );

@@ -15,8 +15,8 @@
 - **Channels (ASGI):** WebSockets para eventos en vivo (estado de bots, replay de backtests).
 - **Celery:** tareas de ingestión (ccxt), ejecución de bots, futuros backtests. Puede correrse en modo memoria para dev, pero brilla con Redis.
 - **PostgreSQL:** almacena usuarios, bots, estrategias, velas y resultados.
-- **Pandas/NumPy:** cálculo de indicadores (SMA, HMA) y helpers vectorizados.
-- **Frontend React (Vite + Lightweight Charts):** playback visual con velas e indicadores SMA200/HMA200, controles para play/pause, velocidad, cambio de timeframe y filtros de fechas.
+- **Pandas/NumPy:** cálculo de indicadores (SMA, HMA, MACD, RSI) y helpers vectorizados.
+- **Frontend React (Vite + Lightweight Charts):** playback visual con velas, indicadores SMA200/HMA200, y sistema de divergencias MACD/RSI con controles para play/pause, velocidad, cambio de timeframe y filtros de fechas.
 
 ## REPO:
 Estructura base del repo:
@@ -27,7 +27,7 @@ apps/
   execution/   # modelo Bot, celery tasks, endpoints start/stop
   risk/        # perfil de riesgo por usuario
   analytics/   # endpoints para dashboards y KPIs
-  datafeeds/   # símbolos y velas OHLCV persistidas (ccxt)
+  datafeeds/   # símbolos, velas OHLCV persistidas (ccxt) y divergencias MACD/RSI
 config/        # settings, routing, celery, asgi
 frontend/      # React + Vite + Lightweight Charts  (visualizador de velas con playback)
 docs/          # documentación adicional (estrategias, etc.)
@@ -40,6 +40,7 @@ Referencias útiles
 - `apps.exchanges`: gestiona cuentas y credenciales de exchanges (CCXT, llaves API).
 - `apps/strategies/indicators.py` y `signals.py`: lógica SMA/HMA + señales long/short.
 - `apps/datafeeds/services.py`: fetch/store de ccxt.
+- `apps/datafeeds/divergence_detector.py`: detección de divergencias MACD/RSI.
 - `apps/execution/tasks.py`: ejemplo de tareas Celery que actualizan estado de bots y notifican vía Channels.
 - `frontend/src/App.tsx`: compositor de UI React, fetch de velas y playback.
 - `docs/strategies/hma_sma_strat.md`: descripción detallada de la estrategia.
@@ -100,13 +101,74 @@ python apps/datafeeds/scripts/fetch_multi_timeframes.py \
 # 6) Frontend React – recuerda levantar primero el backend
 cd frontend && npm install
 cd frontend && npm run dev
+
+# 7) Calcular divergencias MACD y RSI (nuevo sistema de análisis técnico)
+python manage.py calculate_divergences --clear
+# Opciones adicionales:
+# --symbol BTCUSDT    # Solo para un símbolo específico
+# --timeframe 1h      # Solo para un timeframe específico (5m, 1h, 4h)
+# --clear             # Limpiar divergencias existentes antes de calcular
 ```
 
 # ###############################################################################################################################################################################################
 
-## 4. Cómo levantar servicios (dev y prod)
+## 4. Sistema de Divergencias MACD y RSI (Análisis Técnico Avanzado)
 
-### 4.1. Sin Redis (solo para jugar un rato)
+### 4.1. ¿Qué son las divergencias?
+Las divergencias son señales importantes de cambio de tendencia que ocurren cuando el precio y un indicador técnico se mueven en direcciones opuestas:
+
+- **Divergencia Alcista (Bullish)**: El precio forma mínimos más bajos mientras el indicador forma mínimos más altos → Señal de posible reversión alcista
+- **Divergencia Bajista (Bearish)**: El precio forma máximos más altos mientras el indicador forma máximos más bajos → Señal de posible reversión bajista
+
+### 4.2. Características del Sistema
+- ✅ **Precomputado**: Las divergencias se calculan de antemano para máximo rendimiento
+- ✅ **Multi-timeframe**: Detecta divergencias en 5m, 1h y 4h simultáneamente
+- ✅ **Separado de estrategias**: No afecta PnL ni ejecución de trades, solo análisis visual
+- ✅ **Filtrado inteligente**: Solo muestra divergencias completamente visibles en el rango del gráfico
+- ✅ **Colores consistentes**: Mismo tipo de divergencia = mismo color, independiente del timeframe
+
+### 4.3. Uso del Sistema
+
+**Backend - Calcular divergencias:**
+```bash
+# Calcular todas las divergencias (recomendado)
+python manage.py calculate_divergences --clear
+
+# Solo para un símbolo específico
+python manage.py calculate_divergences --symbol BTCUSDT --clear
+
+# Solo para un timeframe específico
+python manage.py calculate_divergences --timeframe 1h --clear
+```
+
+**Frontend - Visualización:**
+1. Abrir el visualizador de estrategias (`npm run dev`)
+2. Activar checkbox **"Show Divergences"** (por defecto desactivado)
+3. Opcionalmente activar **"All Timeframes"** para ver divergencias de todos los timeframes
+4. Las líneas se dibujan automáticamente conectando los puntos de inicio y fin de cada divergencia
+
+### 4.4. Colores y Tipos
+- 🟢 **MACD Alcista**: Verde - Señal de posible reversión alcista
+- 🔴 **MACD Bajista**: Rojo - Señal de posible reversión bajista  
+- 🔵 **RSI Alcista**: Azul - Debilitamiento del momentum bajista
+- 🟠 **RSI Bajista**: Naranja - Debilitamiento del momentum alcista
+
+### 4.5. API Endpoints
+- `GET /api/datafeeds/divergences/` - Obtener divergencias
+  - Parámetros: `symbol`, `timeframe`, `start`, `end`, `show_all_timeframes`
+  - Solo retorna divergencias completamente visibles en el rango especificado
+
+### 4.6. Arquitectura Técnica
+- **Modelo**: `apps.datafeeds.models.Divergence` - Almacena divergencias precomputadas
+- **Detector**: `apps.datafeeds.divergence_detector.DivergenceDetector` - Algoritmo de detección
+- **Comando**: `calculate_divergences` - Procesamiento en lotes
+- **Frontend**: Checkboxes de control + visualización con Lightweight Charts
+
+# ###############################################################################################################################################################################################
+
+## 5. Cómo levantar servicios (dev y prod)
+
+### 5.1. Sin Redis (solo para jugar un rato)
 - Setea `CHANNEL_LAYER_BACKEND=memory` en `.env`. Channels usará un canal en memoria (bien para dev, no escala).
 - **No levantes Celery** o, si necesitás probar algo puntual, usá modo memoria:
   ```env
@@ -118,7 +180,7 @@ cd frontend && npm run dev
   ```
   > Esto funciona en single-process, sin persistencia. Apenas cierres la terminal, chau tareas. Perfecto para demos o experimentos rápidos.
 
-### 4.2. Con Redis (modo recomendado / producción)
+### 5.2. Con Redis (modo recomendado / producción)
 - Levantá Redis:
   ```bash
   # macOS con Homebrew
@@ -127,10 +189,10 @@ cd frontend && npm run dev
   docker run -p 6379:6379 redis:7-alpine
   ```
 - Asegurate de tener `CHANNEL_LAYER_BACKEND=redis` y los `CELERY_*` apuntando al mismo host.
-- Luego encendé Django, el worker y el beat (ver comandos de la sección 3).
+- Luego encendé Django, el worker y el beat (ver comandos de la sección 3 y 4).
 - Redis te da resiliencia y permite múltiples workers Celery + Channels con WebSockets reales.
 
-## . Tips de producción:
+## 5.3. Tips de producción:
 
 - **Redis obligatorio:** para Channels + Celery en serio. Considera instancias administradas o contenedores redundantes.
 - **ASGI server:** usa `daphne` o `uvicorn/gunicorn` según prefieras. Recuerda correr al menos un worker Celery (o más según carga).
@@ -140,7 +202,7 @@ cd frontend && npm run dev
 
 # ###############################################################################################################################################################################################
 
-## 5. Ingesta de datos OHLCV (ccxt + datafeeds)
+## 6. Ingesta de datos OHLCV (ccxt + datafeeds)
 
 1. **Registrar símbolo (si no existe)** – el comando lo crea automáticamente si le das `--base` y `--quote`.
    ```bash
@@ -166,6 +228,20 @@ cd frontend && npm run dev
    - El endpoint también devuelve `should_enter_long` y `should_enter_short`, de modo que la UI muestra cuándo hay setup alcista o bajista activo.
    - El slider permite pausar, avanzar paso a paso o cambiar la velocidad; el panel lateral muestra si, en la vela actual, la condición sigue activa.
 5. **Sin Redis?** Podés usar el frontend igual; sólo necesitas que el API responda a las peticiones REST. Si querés WebSockets o Celery en serio, reactivá Redis.
+
+### Indicadores activables
+
+- La lista de medias móviles configurables está en `apps/strategies/config.py` (`STRATEGY_INDICATORS`).
+- Cada familia (`sma`, `hma`) declara los timeframes (`5m`, `30m`, `1h`, `4h`, `1d`). Cada valor puede ser:
+  - `True`/`False` (legacy): `True` equivale a calcular y graficar.
+  - Objeto `{ calc: bool, plot: bool }`: `calc` controla el cálculo backend; `plot` controla si se incluye en la respuesta para graficar.
+- El endpoint `GET /api/strategies/hma-sma/run/` publica sólo las series con `plot: true` bajo `indicators.sma` / `indicators.hma`. El frontend dibuja exactamente lo que reciba.
+- Para activar/desactivar overlays no hace falta tocar el frontend: modificá el config y recargá.
+
+### Estrategias visibles (dropdown)
+
+- La lista y etiquetas del dropdown del frontend provienen de `STRATEGY_DEFINITIONS` en `apps/strategies/config.py`.
+- El backend expone `GET /api/strategies/config/` y el frontend usa esta respuesta para poblar el selector.
 
 
 
@@ -245,6 +321,4 @@ fetch_multi_timeframes.py ──▶ services.fetch_ohlcv ─▶ Candle.bulk_crea
 
 Esta vista rápida ayuda a navegar el repo: si buscas dónde se calcula la HMA dinámica, ve a `apps/strategies/views.py`; si querés ajustar la ingesta, visita `apps/datafeeds/services.py` o el script de `scripts/`. 
 ```
-
-
 

@@ -295,6 +295,39 @@
   letter-spacing: 0.05em;
 }
 
+.trades-table th .sort-button {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+.trades-table th .sort-button:hover,
+.trades-table th .sort-button:focus-visible {
+  color: #f8fafc;
+}
+
+.trades-table th .sort-button:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+.trades-table th .sort-indicator {
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+
+.trades-table th .sort-button:hover .sort-indicator,
+.trades-table th .sort-button:focus-visible .sort-indicator {
+  opacity: 1;
+}
+
 .trades-table tbody tr {
   border-bottom: 1px solid #1f2937;
   transition: background 0.2s ease;

@@ -5,9 +5,10 @@ import type { UTCTimestamp } from 'lightweight-charts';
 import './App.css';
 import { fetchSymbols } from './api/datafeeds';
 import type { SymbolDTO, Timeframe } from './api/types';
-import { fetchHMASMAStrategy } from './api/strategy';
-import type { StrategyEntry } from './api/strategy';
+import { fetchHMASMAStrategy, fetchStrategyConfig } from './api/strategy';
+import type { StrategyEntry, StrategyOption } from './api/strategy';
 import { CandlestickChart } from './components/CandlestickChart';
+import type { IndicatorSeries } from './components/CandlestickChart';
 import { usePlayback } from './hooks/usePlayback';
 
 const TIMEFRAMES: Timeframe[] = ['5m', '30m', '1h', '4h', '1d'];
@@ -23,6 +24,15 @@ type Trade = {
   exitPrice: number;
   pnl: number;
 };
+type TradeSortKey =
+  | 'direction'
+  | 'entryTime'
+  | 'entryPrice'
+  | 'exitTime'
+  | 'exitPrice'
+  | 'duration'
+  | 'pnlUsd'
+  | 'pnlPercent';
 
 function App() {
   const symbolsQuery = useQuery<SymbolDTO[]>({
@@ -38,6 +48,36 @@ function App() {
   const [end, setEnd] = useState<string>('');
   const [positionSize, setPositionSize] = useState<number>(1000);
   const [strategy, setStrategy] = useState<string>('1');
+  const [tradeSort, setTradeSort] = useState<{ key: TradeSortKey; direction: 'asc' | 'desc' }>({
+    key: 'exitTime',
+    direction: 'desc',
+  });
+
+  // Load strategies config from backend (with fallback)
+  const strategiesQuery = useQuery<{ strategies: StrategyOption[]; indicator_styles: Record<'sma' | 'hma', Record<string, { color?: string; width?: number }>> }>({
+    queryKey: ['strategies-config'],
+    queryFn: fetchStrategyConfig,
+    staleTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const strategyOptions: StrategyOption[] = strategiesQuery.data?.strategies?.length
+    ? strategiesQuery.data.strategies
+    : [
+        { id: '1', label: 'Strategy 1 - Multi-timeframe' },
+        { id: '2', label: 'Strategy 2 - Crossover' },
+        { id: '3', label: 'Strategy 3 - Smart Crossover Hybrid' },
+        { id: '4', label: 'Estrategia 4 - 5m vs 1h' },
+      ];
+
+  // Ensure current strategy is valid
+  useEffect(() => {
+    if (!strategyOptions.length) return;
+    const has = strategyOptions.some((s) => s.id === strategy);
+    if (!has) {
+      setStrategy(strategyOptions[0].id);
+    }
+  }, [strategyOptions, strategy]);
 
   useEffect(() => {
     if (!symbolsQuery.data || !symbolsQuery.data.length) return;
@@ -63,12 +103,49 @@ function App() {
   });
 
   const candles = strategyQuery.data?.candles ?? [];
-  const sma200 = strategyQuery.data?.sma200 ?? [];
-  const hma1h = strategyQuery.data?.hma200?.['1h'] ?? [];
-  const hma4h = strategyQuery.data?.hma200?.['4h'] ?? [];
   const entries: StrategyEntry[] = strategyQuery.data?.entries ?? [];
   const signalTimeline = strategyQuery.data?.signal_timeline ?? [];
   const effectiveTimeframe = strategyQuery.data?.timeframe ?? timeframe;
+  const indicators = strategyQuery.data?.indicators ?? { sma: {}, hma: {} };
+
+  const indicatorSeries = useMemo<IndicatorSeries[]>(() => {
+    const colorMap: Record<string, Record<string, string>> = {
+      sma: {
+        '5m': '#facc15',
+        '30m': '#fbbf24',
+        '1h': '#f97316',
+        '4h': '#fb7185',
+        '1d': '#f43f5e',
+      },
+      hma: {
+        '5m': '#22d3ee',
+        '30m': '#0ea5e9',
+        '1h': '#60a5fa',
+        '4h': '#a855f7',
+        '1d': '#7c3aed',
+      },
+    };
+    const styleMap = strategiesQuery.data?.indicator_styles ?? { sma: {}, hma: {} };
+    const series: IndicatorSeries[] = [];
+    (['sma', 'hma'] as const).forEach((type) => {
+      const timeframeMap = indicators[type] ?? {};
+      Object.entries(timeframeMap).forEach(([tf, points]) => {
+        if (!points || points.length === 0) return;
+        const style = (styleMap as any)?.[type]?.[tf] || {};
+        series.push({
+          id: `${type}_${tf}`,
+          type,
+          timeframe: tf,
+          label: `${type.toUpperCase()}200 ${tf}`,
+          color: style.color ?? (colorMap[type]?.[tf] ?? (type === 'sma' ? '#facc15' : '#60a5fa')),
+          width: typeof style.width === 'number' ? style.width : 2,
+          data: points,
+        });
+      });
+    });
+
+    return series;
+  }, [indicators, strategiesQuery.data]);
 
   const {
     index,
@@ -124,6 +201,10 @@ function App() {
     unrealizedPnl: number;
     totalPnl: number;
     tradeCount: number;
+    grossWins: number;
+    grossLosses: number;
+    winCount: number;
+    lossCount: number;
     openLong: OpenPosition | null;
     openShort: OpenPosition | null;
     currentPosition:
@@ -180,6 +261,10 @@ function App() {
     });
 
     const closedPnl = trades.reduce((sum, trade) => sum + trade.pnl, 0);
+    const grossWins = trades.reduce((s, t) => (t.pnl > 0 ? s + t.pnl : s), 0);
+    const grossLosses = trades.reduce((s, t) => (t.pnl < 0 ? s + t.pnl : s), 0);
+    const winCount = trades.reduce((c, t) => (t.pnl > 0 ? c + 1 : c), 0);
+    const lossCount = trades.reduce((c, t) => (t.pnl < 0 ? c + 1 : c), 0);
     let unrealizedPnl = 0;
     if (currentPrice != null) {
       if (openLongPrice != null) {
@@ -196,6 +281,10 @@ function App() {
       unrealizedPnl,
       totalPnl: closedPnl + unrealizedPnl,
       tradeCount: trades.length,
+      grossWins,
+      grossLosses,
+      winCount,
+      lossCount,
       openLong: openLongPrice != null && openLongTime != null ? { time: openLongTime, price: openLongPrice } : null,
       openShort: openShortPrice != null && openShortTime != null ? { time: openShortTime, price: openShortPrice } : null,
       currentPosition:
@@ -206,6 +295,69 @@ function App() {
           : null,
     };
   }, [visibleEntries, positionSize, currentPrice]);
+
+  const sortedTrades = useMemo(() => {
+    const trades = [...metrics.trades];
+    const sizeForPercent = positionSize;
+    const directionMultiplier = tradeSort.direction === 'asc' ? 1 : -1;
+
+    const getValue = (trade: Trade): number => {
+      switch (tradeSort.key) {
+        case 'direction':
+          return trade.direction === 'long' ? 0 : 1;
+        case 'entryTime':
+          return Number(trade.entryTime);
+        case 'entryPrice':
+          return trade.entryPrice;
+        case 'exitTime':
+          return Number(trade.exitTime);
+        case 'exitPrice':
+          return trade.exitPrice;
+        case 'duration':
+          return Number(trade.exitTime) - Number(trade.entryTime);
+        case 'pnlPercent':
+          return sizeForPercent === 0 ? 0 : (trade.pnl / sizeForPercent) * 100;
+        case 'pnlUsd':
+        default:
+          return trade.pnl;
+      }
+    };
+
+    trades.sort((a, b) => {
+      const valueA = getValue(a);
+      const valueB = getValue(b);
+      if (valueA === valueB) {
+        return Number(b.exitTime) - Number(a.exitTime);
+      }
+      return valueA > valueB ? directionMultiplier : -directionMultiplier;
+    });
+
+    return trades;
+  }, [metrics.trades, tradeSort, positionSize]);
+
+  const handleTradeSort = (key: TradeSortKey) => {
+    setTradeSort((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      const defaultDirection: Record<TradeSortKey, 'asc' | 'desc'> = {
+        direction: 'asc',
+        entryTime: 'desc',
+        entryPrice: 'desc',
+        exitTime: 'desc',
+        exitPrice: 'desc',
+        duration: 'desc',
+        pnlUsd: 'desc',
+        pnlPercent: 'desc',
+      };
+      return { key, direction: defaultDirection[key] ?? 'desc' };
+    });
+  };
+
+  const renderSortIndicator = (key: TradeSortKey) => {
+    if (tradeSort.key !== key) return '';
+    return tradeSort.direction === 'asc' ? '▲' : '▼';
+  };
 
 
   return (
@@ -253,9 +405,11 @@ function App() {
             value={strategy}
             onChange={(event) => setStrategy(event.target.value)}
           >
-            <option value="1">Strategy 1 - Multi-timeframe</option>
-            <option value="2">Strategy 2 - Crossover</option>
-            <option value="3">Strategy 3 - Smart Crossover Hybrid</option>
+            {strategyOptions.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -312,12 +466,11 @@ function App() {
         <div className="chart-section">
           <CandlestickChart
             candles={candles}
-            sma={sma200}
-            hma1h={hma1h}
-            hma4h={hma4h}
+            indicatorSeries={indicatorSeries}
             entries={visibleEntries}
             currentIndex={index}
             timeframe={effectiveTimeframe}
+            symbol={selectedSymbol}
           />
           <div className="chart-info">
             {currentCandle ? (
@@ -364,12 +517,13 @@ function App() {
               value={positionSize}
               onChange={(event) => setPositionSize(Math.max(0, Number(event.target.value) || 0))}
             />
-            <div
-              className="pnl-display"
-              style={{ color: metrics.totalPnl >= 0 ? '#22c55e' : '#ef4444' }}
-            >
-              Closed: {metrics.closedPnl.toFixed(2)} · Open: {metrics.unrealizedPnl.toFixed(2)} · Total:{' '}
-              {metrics.totalPnl.toFixed(2)} USD · Trades: {metrics.tradeCount}
+            <div className="pnl-display" style={{ color: metrics.totalPnl >= 0 ? '#22c55e' : '#ef4444' }}>
+              Closed: {metrics.closedPnl.toFixed(2)} · Open: {metrics.unrealizedPnl.toFixed(2)} · Total: {metrics.totalPnl.toFixed(2)} USD · Trades: {metrics.tradeCount}
+            </div>
+            <div className="pnl-breakdown">
+              Wins: <span style={{ color: '#22c55e' }}>+{metrics.grossWins.toFixed(2)}</span> ·
+              Losses: <span style={{ color: '#ef4444' }}>{metrics.grossLosses.toFixed(2)}</span> ·
+              Win/Loss count: {metrics.winCount}/{metrics.lossCount}
             </div>
             <div className="position-display">
               <strong>Position:</strong>{' '}
@@ -439,34 +593,98 @@ function App() {
             <table>
               <thead>
                 <tr>
-                  <th>Type</th>
-                  <th>Entry Time</th>
-                  <th>Entry Price</th>
-                  <th>Exit Time</th>
-                  <th>Exit Price</th>
-                  <th>Duration</th>
-                  <th>PnL (USD)</th>
-                  <th>PnL (%)</th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('direction')}
+                    >
+                      Type <span className="sort-indicator">{renderSortIndicator('direction')}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('entryTime')}
+                    >
+                      Entry Time <span className="sort-indicator">{renderSortIndicator('entryTime')}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('entryPrice')}
+                    >
+                      Entry Price <span className="sort-indicator">{renderSortIndicator('entryPrice')}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('exitTime')}
+                    >
+                      Exit Time <span className="sort-indicator">{renderSortIndicator('exitTime')}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('exitPrice')}
+                    >
+                      Exit Price <span className="sort-indicator">{renderSortIndicator('exitPrice')}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('duration')}
+                    >
+                      Duration <span className="sort-indicator">{renderSortIndicator('duration')}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('pnlUsd')}
+                    >
+                      PnL (USD) <span className="sort-indicator">{renderSortIndicator('pnlUsd')}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button
+                      type="button"
+                      className="sort-button"
+                      onClick={() => handleTradeSort('pnlPercent')}
+                    >
+                      PnL (%) <span className="sort-indicator">{renderSortIndicator('pnlPercent')}</span>
+                    </button>
+                  </th>
                   <th>Result</th>
                 </tr>
               </thead>
               <tbody>
-                {[...metrics.trades].reverse().map((trade, idx) => {
-                  const originalIndex = metrics.trades.length - 1 - idx;
+                {sortedTrades.map((trade, idx) => {
+                  const rowKey = `${trade.direction}-${trade.entryTime}-${trade.exitTime}-${idx}`;
                   const durationSeconds = trade.exitTime - trade.entryTime;
                   const durationMinutes = Math.floor(durationSeconds / 60);
                   const durationHours = Math.floor(durationMinutes / 60);
                   const remainingMinutes = durationMinutes % 60;
-                  const durationDisplay = 
-                    durationHours > 0 
+                  const durationDisplay =
+                    durationHours > 0
                       ? `${durationHours}h ${remainingMinutes}m`
                       : `${durationMinutes}m`;
-                  const pnlPercent = ((trade.pnl / positionSize) * 100).toFixed(2);
-                  const pnlPercentNum = parseFloat(pnlPercent);
+                  const pnlPercentValue = positionSize === 0 ? 0 : (trade.pnl / positionSize) * 100;
+                  const pnlPercent = pnlPercentValue.toFixed(2);
                   const isWin = trade.pnl > 0;
                   
                   return (
-                    <tr key={originalIndex} className={isWin ? 'win' : 'loss'}>
+                    <tr key={rowKey} className={isWin ? 'win' : 'loss'}>
                       <td className="trade-type">
                         <span className={`badge ${trade.direction}`}>
                           {trade.direction.toUpperCase()}
@@ -481,7 +699,7 @@ function App() {
                         {trade.pnl > 0 ? '+' : ''}{trade.pnl.toFixed(2)}
                       </td>
                       <td className={`pnl ${isWin ? 'positive' : 'negative'}`}>
-                        {pnlPercentNum > 0 ? '+' : ''}{pnlPercent}%
+                        {pnlPercentValue > 0 ? '+' : ''}{pnlPercent}%
                       </td>
                       <td>
                         <span className={`result-badge ${isWin ? 'win' : 'loss'}`}>

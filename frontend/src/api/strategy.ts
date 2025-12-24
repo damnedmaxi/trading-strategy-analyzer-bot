@@ -26,8 +26,7 @@ export interface HMASMAStrategyResponse {
   symbol: string;
   timeframe: Timeframe;
   candles: Candle[];
-  sma200: IndicatorPoint[];
-  hma200: Record<string, IndicatorPoint[]>;
+  indicators: Record<'sma' | 'hma', Record<string, IndicatorPoint[]>>;
   entries: StrategyEntry[];
   signal_timeline: SignalSnapshot[];
   latest_signal: StrategySnapshot | null;
@@ -62,10 +61,38 @@ export interface StrategyRunParams {
   strategy?: string;
 }
 
+export interface StrategyOption {
+  id: string;
+  label: string;
+}
+
+export type IndicatorStyleMap = Record<'sma' | 'hma', Record<string, { color?: string; width?: number }>>;
+
+export async function fetchStrategyConfig(): Promise<{ strategies: StrategyOption[]; indicator_styles: IndicatorStyleMap }> {
+  const { data } = await apiClient.get('/api/strategies/config/');
+  const strategies: StrategyOption[] = (data?.strategies || [])
+    .map((s: any) => ({ id: String(s.id), label: String(s.label) }))
+    .filter((s: StrategyOption) => s.id && s.label);
+  const indicator_styles: IndicatorStyleMap = {
+    sma: { ...(data?.indicator_styles?.sma || {}) },
+    hma: { ...(data?.indicator_styles?.hma || {}) },
+  };
+  return { strategies, indicator_styles };
+}
+
 export async function fetchHMASMAStrategy(params: StrategyRunParams): Promise<HMASMAStrategyResponse> {
   const { data } = await apiClient.get('/api/strategies/hma-sma/run/', {
     params,
   });
+
+  const convertSeriesMap = (seriesMap: Record<string, any[]> | undefined) => {
+    const converted: Record<string, IndicatorPoint[]> = {};
+    if (!seriesMap) return converted;
+    Object.entries(seriesMap).forEach(([tf, points]) => {
+      converted[tf] = convertIndicator(points as any[]);
+    });
+    return converted;
+  };
 
   return {
     symbol: data.symbol,
@@ -78,10 +105,10 @@ export async function fetchHMASMAStrategy(params: StrategyRunParams): Promise<HM
       close: toNumber(c.close),
       volume: toNumber(c.volume),
     })),
-    sma200: convertIndicator(data.sma200),
-    hma200: Object.fromEntries(
-      Object.entries(data.hma200 || {}).map(([key, series]) => [key, convertIndicator(series as any)]),
-    ),
+    indicators: {
+      sma: convertSeriesMap(data.indicators?.sma),
+      hma: convertSeriesMap(data.indicators?.hma),
+    },
     entries: (data.entries || []).map((entry: any) => ({
       time: Math.floor(new Date(entry.time).getTime() / 1000) as UTCTimestamp,
       sourceTime: Math.floor(new Date((entry.source_time ?? entry.time)).getTime() / 1000) as UTCTimestamp,

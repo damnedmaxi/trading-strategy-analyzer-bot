@@ -40,3 +40,27 @@ export interface IndicatorPoint {
 }
 
 export type Timeframe = '5m' | '30m' | '1h' | '4h' | '1d';
+
+export interface DivergenceDTO {
+  id: string;
+  timeframe: string;
+  divergence_type: string;
+  start_timestamp: string;
+  start_price: string;
+  end_timestamp: string;
+  end_price: string;
+  is_bullish: boolean;
+  is_macd: boolean;
+}
+
+export interface Divergence {
+  id: string;
+  timeframe: Timeframe;
+  type: string;
+  startTime: UTCTimestamp;
+  startPrice: number;
+  endTime: UTCTimestamp;
+  endPrice: number;
+  isBullish: boolean;
+  isMacd: boolean;
+}

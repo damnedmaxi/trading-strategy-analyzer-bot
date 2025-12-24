@@ -62,3 +62,51 @@ class Candle(models.Model):
     @classmethod
     def normalize_value(cls, value: float | Decimal | str) -> Decimal:
         return Decimal(str(value))
+
+
+class Divergence(models.Model):
+    """Stores precomputed divergences between price and indicators."""
+    
+    class DivergenceType(models.TextChoices):
+        MACD_BULLISH = "macd_bullish", "MACD Bullish Divergence"
+        MACD_BEARISH = "macd_bearish", "MACD Bearish Divergence"
+        RSI_BULLISH = "rsi_bullish", "RSI Bullish Divergence"
+        RSI_BEARISH = "rsi_bearish", "RSI Bearish Divergence"
+    
+    symbol = models.ForeignKey(Symbol, related_name="divergences", on_delete=models.CASCADE)
+    timeframe = models.CharField(max_length=5, choices=Candle.Timeframe.choices)
+    divergence_type = models.CharField(max_length=20, choices=DivergenceType.choices)
+    
+    # Start point of divergence
+    start_timestamp = models.DateTimeField()
+    start_price = models.DecimalField(max_digits=20, decimal_places=8)
+    start_indicator_value = models.DecimalField(max_digits=20, decimal_places=8)
+    
+    # End point of divergence
+    end_timestamp = models.DateTimeField()
+    end_price = models.DecimalField(max_digits=20, decimal_places=8)
+    end_indicator_value = models.DecimalField(max_digits=20, decimal_places=8)
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ("symbol", "timeframe", "start_timestamp")
+        indexes = [
+            models.Index(fields=["symbol", "timeframe", "start_timestamp"]),
+            models.Index(fields=["symbol", "timeframe", "divergence_type"]),
+        ]
+    
+    def __str__(self) -> str:
+        return f"{self.symbol.code} {self.timeframe} {self.divergence_type} ({self.start_timestamp} - {self.end_timestamp})"
+    
+    @property
+    def is_bullish(self) -> bool:
+        """Returns True if this is a bullish divergence."""
+        return self.divergence_type in [self.DivergenceType.MACD_BULLISH, self.DivergenceType.RSI_BULLISH]
+    
+    @property
+    def is_macd(self) -> bool:
+        """Returns True if this is a MACD divergence."""
+        return self.divergence_type in [self.DivergenceType.MACD_BULLISH, self.DivergenceType.MACD_BEARISH]

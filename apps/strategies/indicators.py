@@ -92,3 +92,65 @@ def volume_average(volume: pd.Series, period: int) -> pd.Series:
     """
     validate_series(volume, period)
     return volume.rolling(window=period, min_periods=period).mean()
+
+
+def macd(close: pd.Series, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Calculate MACD (Moving Average Convergence Divergence).
+    
+    Args:
+        close: Close prices
+        fast_period: Fast EMA period (default 12)
+        slow_period: Slow EMA period (default 26)
+        signal_period: Signal line EMA period (default 9)
+        
+    Returns:
+        Tuple of (MACD line, Signal line, Histogram)
+    """
+    validate_series(close, fast_period)
+    
+    # Calculate EMAs
+    ema_fast = close.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = close.ewm(span=slow_period, adjust=False).mean()
+    
+    # MACD line
+    macd_line = ema_fast - ema_slow
+    
+    # Signal line
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    
+    # Histogram
+    histogram = macd_line - signal_line
+    
+    return macd_line, signal_line, histogram
+
+
+def rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """
+    Calculate RSI (Relative Strength Index).
+    
+    Args:
+        close: Close prices
+        period: RSI period (default 14)
+        
+    Returns:
+        RSI values
+    """
+    validate_series(close, period)
+    
+    # Calculate price changes
+    delta = close.diff()
+    
+    # Separate gains and losses
+    gains = delta.where(delta > 0, 0)
+    losses = -delta.where(delta < 0, 0)
+    
+    # Calculate average gains and losses
+    avg_gains = gains.rolling(window=period, min_periods=period).mean()
+    avg_losses = losses.rolling(window=period, min_periods=period).mean()
+    
+    # Calculate RSI
+    rs = avg_gains / avg_losses
+    rsi = 100 - (100 / (1 + rs))
+    
+    return rsi
